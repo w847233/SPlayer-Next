@@ -23,6 +23,7 @@ jobs:
     outputs:
       updated: ${{ steps.check.outputs.updated }}
       upstream_sha: ${{ steps.check.outputs.upstream_sha }}
+      commits: ${{ steps.check.outputs.commits }}
     steps:
       - name: Checkout fork dev
         uses: actions/checkout@v5
@@ -42,11 +43,17 @@ jobs:
           echo "commits behind upstream: ${BEHIND}"
           FORCE="${{ github.event.inputs.force == 'true' }}"
           if [ "${BEHIND}" -gt 0 ]; then
+            git log --format="%h|%H|%s" HEAD..upstream/dev > /tmp/upstream_commits.txt
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git merge upstream/dev --no-edit --no-ff
             git push origin dev
             echo "merged ${BEHIND} commit(s) from upstream"
+            {
+              echo "commits<<EOF"
+              cat /tmp/upstream_commits.txt
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
           fi
           if [ "${BEHIND}" -gt 0 ] || [ "${FORCE}" = "true" ]; then
             echo "updated=true" >> "$GITHUB_OUTPUT"
@@ -146,6 +153,7 @@ jobs:
           RELEASE_RESULT: ${{ needs.release.result }}
           RELEASE_URL: ${{ needs.release.outputs.release_url }}
           UPSTREAM_SHA: ${{ needs.sync.outputs.upstream_sha }}
+          UPSTREAM_COMMITS: ${{ needs.sync.outputs.commits }}
           RUN_URL: https://github.com/w847233/SPlayer-Next/actions/runs/${{ github.run_id }}
         run: |
           python3 - <<'PYEOF'
@@ -187,9 +195,32 @@ jobs:
               detail = (
                   f"**上游 commit**：`{upstream_sha}`\n"
                   f"**构建时间**：{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} (UTC)\n"
-                  f"**Release**：[{release_url}]({release_url})\n"
-                  "包含：安装包 `*-setup.exe` + 便携版 `*-portable.exe`"
+                  f"**Release**：[{release_url}]({release_url})"
               )
+              commits_raw = os.environ.get("UPSTREAM_COMMITS", "").strip()
+              if commits_raw:
+                  import re
+                  rows = []
+                  stats = {}
+                  for ln in commits_raw.splitlines():
+                      parts = ln.split("|", 2)
+                      if len(parts) == 3:
+                          short_sha, full_sha, subject = parts
+                          rows.append(
+                              f"[`{short_sha}`](https://github.com/SPlayer-Dev/SPlayer-Next/commit/{full_sha}) {subject}"
+                          )
+                          m = re.match(r"^(\w+):", subject)
+                          if m:
+                              stats[m.group(1)] = stats.get(m.group(1), 0) + 1
+                  max_show = 12
+                  commit_block = "\n".join(rows[:max_show])
+                  if len(rows) > max_show:
+                      commit_block += f"\n… 共 {len(rows)} 个提交"
+                  summary = "、".join(f"{k}×{v}" for k, v in stats.items())
+                  detail += f"\n**变更摘要**：{summary or '无类型标签'}"
+                  detail += f"\n\n**上游提交（{len(rows)}）**：\n{commit_block}"
+              else:
+                  detail += "\n\n（手动触发构建，无上游新提交）"
 
           card = {
               "msg_type": "interactive",
