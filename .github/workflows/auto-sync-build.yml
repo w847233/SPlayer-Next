@@ -84,10 +84,13 @@ jobs:
           }
           "LIBCLANG_PATH=$llvmBin" | Out-File -Append -FilePath $env:GITHUB_ENV
       - name: Remove npm mirror config
+        shell: bash
         run: rm -f .npmrc
       - name: Install dependencies
+        shell: bash
         run: pnpm install
       - name: Build Windows x64
+        shell: bash
         run: pnpm build:win --x64
       - name: Upload installers as artifact
         uses: actions/upload-artifact@v7
