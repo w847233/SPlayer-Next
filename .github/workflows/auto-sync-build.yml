@@ -1,0 +1,243 @@
+name: Auto Sync & Build Windows x64
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Force build even if upstream has no updates"
+        type: boolean
+        default: false
+
+concurrency:
+  group: auto-sync-build
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync upstream
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      updated: ${{ steps.check.outputs.updated }}
+      upstream_sha: ${{ steps.check.outputs.upstream_sha }}
+    steps:
+      - name: Checkout fork dev
+        uses: actions/checkout@v5
+        with:
+          ref: dev
+          fetch-depth: 0
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/SPlayer-Dev/SPlayer-Next.git
+          git fetch upstream dev
+      - name: Merge upstream and push
+        id: check
+        run: |
+          set -euo pipefail
+          BEHIND=$(git rev-list --count HEAD..upstream/dev)
+          UPSTREAM_SHA=$(git rev-parse --short upstream/dev)
+          echo "commits behind upstream: ${BEHIND}"
+          FORCE="${{ github.event.inputs.force == 'true' }}"
+          if [ "${BEHIND}" -gt 0 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git merge upstream/dev --no-edit --no-ff
+            git push origin dev
+            echo "merged ${BEHIND} commit(s) from upstream"
+          fi
+          if [ "${BEHIND}" -gt 0 ] || [ "${FORCE}" = "true" ]; then
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build Windows x64
+    needs: sync
+    if: needs.sync.outputs.updated == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "native/audio-engine -> target\nnative/media-ctrl -> target"
+      - name: Prepare LLVM for bindgen
+        shell: pwsh
+        run: |
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (Test-Path "$llvmBin\libclang.dll") {
+            Write-Host "LLVM found at $llvmBin"
+          } else {
+            Write-Host "LLVM not found, installing via choco..."
+            choco install llvm -y --no-progress
+          }
+          "LIBCLANG_PATH=$llvmBin" | Out-File -Append -FilePath $env:GITHUB_ENV
+      - name: Remove npm mirror config
+        run: rm -f .npmrc
+      - name: Install dependencies
+        run: pnpm install
+      - name: Build Windows x64
+        run: pnpm build:win --x64
+      - name: Upload installers as artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64-installers
+          path: |
+            dist/SPlayer-Next-*-x64-setup.exe
+            dist/SPlayer-Next-*-x64-portable.exe
+            dist/latest.yml
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [sync, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.create.outputs.tag }}
+      release_url: ${{ steps.create.outputs.release_url }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-x64-installers
+          path: artifacts
+      - name: Create tag and release
+        id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_SHA: ${{ needs.sync.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          TAG="auto-$(date -u +'%Y%m%d-%H%M%S')-${UPSTREAM_SHA}"
+          gh release create "$TAG" artifacts/*.exe artifacts/latest.yml \
+            --title "Auto Build ${UPSTREAM_SHA} ($(date -u +'%Y-%m-%d %H:%M UTC'))" \
+            --notes "Automatically built from upstream commit \`${UPSTREAM_SHA}\` on \`dev\`."
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_url=https://github.com/w847233/SPlayer-Next/releases/tag/${TAG}" >> "$GITHUB_OUTPUT"
+
+  notify:
+    name: Notify Feishu
+    needs: [sync, build, release]
+    if: always() && (needs.sync.result == 'failure' || needs.sync.outputs.updated == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compose and send Feishu card
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+          SYNC_RESULT: ${{ needs.sync.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RELEASE_RESULT: ${{ needs.release.result }}
+          RELEASE_URL: ${{ needs.release.outputs.release_url }}
+          UPSTREAM_SHA: ${{ needs.sync.outputs.upstream_sha }}
+          RUN_URL: https://github.com/w847233/SPlayer-Next/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PYEOF'
+          import base64, hashlib, hmac, json, os, sys, time, urllib.request
+
+          webhook = os.environ.get("FEISHU_WEBHOOK", "")
+          if not webhook:
+              print("FEISHU_WEBHOOK not configured, skip notification")
+              sys.exit(0)
+
+          sync_result = os.environ.get("SYNC_RESULT", "")
+          build_result = os.environ.get("BUILD_RESULT", "")
+          release_result = os.environ.get("RELEASE_RESULT", "")
+          run_url = os.environ.get("RUN_URL", "")
+
+          if sync_result == "failure":
+              title, template, detail = (
+                  "❌ SPlayer-Next 自动构建失败：上游同步失败",
+                  "red",
+                  "同步上游 `dev` 时出错（可能是合并冲突）。\n请人工处理：查看 Actions 日志。",
+              )
+          elif build_result == "failure":
+              title, template, detail = (
+                  "❌ SPlayer-Next 自动构建失败：Windows x64 构建失败",
+                  "red",
+                  "构建阶段出错（依赖安装 / Rust 编译 / 打包）。\n请查看 Actions 日志定位问题。",
+              )
+          elif release_result == "failure":
+              title, template, detail = (
+                  "❌ SPlayer-Next 自动构建失败：发布 Release 失败",
+                  "red",
+                  "安装包已构建完成，但创建 GitHub Release 时出错。\n请查看 Actions 日志。",
+              )
+          else:
+              release_url = os.environ.get("RELEASE_URL", "")
+              upstream_sha = os.environ.get("UPSTREAM_SHA", "")
+              title = "✅ SPlayer-Next 自动构建成功"
+              template = "green"
+              detail = (
+                  f"**上游 commit**：`{upstream_sha}`\n"
+                  f"**构建时间**：{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())} (UTC)\n"
+                  f"**Release**：[{release_url}]({release_url})\n"
+                  "包含：安装包 `*-setup.exe` + 便携版 `*-portable.exe`"
+              )
+
+          card = {
+              "msg_type": "interactive",
+              "card": {
+                  "config": {"wide_screen_mode": True},
+                  "header": {
+                      "title": {"tag": "plain_text", "content": title},
+                      "template": template,
+                  },
+                  "elements": [
+                      {"tag": "div", "text": {"tag": "lark_md", "content": detail}},
+                      {
+                          "tag": "action",
+                          "actions": [
+                              {
+                                  "tag": "button",
+                                  "text": {"tag": "plain_text", "content": "查看构建日志"},
+                                  "type": "default",
+                                  "url": run_url,
+                              }
+                          ],
+                      },
+                  ],
+              },
+          }
+          if "成功" in title:
+              card["card"]["elements"].append(
+                  {
+                      "tag": "action",
+                      "actions": [
+                          {
+                              "tag": "button",
+                              "text": {"tag": "plain_text", "content": "下载安装包"},
+                              "type": "primary",
+                              "url": os.environ["RELEASE_URL"],
+                          }
+                      ],
+                  }
+              )
+
+          secret = os.environ.get("FEISHU_SECRET", "")
+          headers = {"Content-Type": "application/json"}
+          if secret:
+              ts = str(int(time.time()))
+              string_to_sign = f"{ts}\n{secret}"
+              hmac_code = hmac.new(string_to_sign.encode("utf-8"), digestmod=hashlib.sha256).digest()
+              sign = base64.b64encode(hmac_code).decode("utf-8")
+              headers["X-Lark-Request-Timestamp"] = ts
+              headers["X-Lark-Signature"] = sign
+
+          body = json.dumps(card).encode("utf-8")
+          req = urllib.request.Request(webhook, data=body, headers=headers, method="POST")
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              print("Feishu response:", resp.read().decode("utf-8"))
+          PYEOF
