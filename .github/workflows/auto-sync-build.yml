@@ -112,6 +112,7 @@ jobs:
       tag: ${{ steps.create.outputs.tag }}
       release_url: ${{ steps.create.outputs.release_url }}
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v8
         with:
           name: windows-x64-installers
