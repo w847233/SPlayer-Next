@@ -18,8 +18,8 @@ jobs:
   sync:
     name: Sync upstream
     runs-on: ubuntu-latest
-    # 注意:此处不声明 permissions,继承仓库默认权限(仓库已设为 Read and write,
-    # 使 GITHUB_TOKEN 持有 workflows: write,否则推送含 workflow 文件变更的提交会被拒)
+    permissions:
+      contents: write
     outputs:
       updated: ${{ steps.check.outputs.updated }}
       upstream_sha: ${{ steps.check.outputs.upstream_sha }}
@@ -36,6 +36,8 @@ jobs:
           git fetch upstream dev
       - name: Merge upstream and push
         id: check
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
           set -euo pipefail
           BEHIND=$(git rev-list --count HEAD..upstream/dev)
@@ -47,6 +49,9 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git merge upstream/dev --no-edit --no-ff
+            if [ -n "${SYNC_TOKEN}" ]; then
+              git remote set-url origin "https://x-access-token:${SYNC_TOKEN}@github.com/w847233/SPlayer-Next.git"
+            fi
             git push origin dev
             echo "merged ${BEHIND} commit(s) from upstream"
             {
