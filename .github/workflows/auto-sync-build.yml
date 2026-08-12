@@ -51,6 +51,8 @@ jobs:
             git merge upstream/dev --no-edit --no-ff
             if [ -n "${SYNC_TOKEN}" ]; then
               git remote set-url origin "https://x-access-token:${SYNC_TOKEN}@github.com/w847233/SPlayer-Next.git"
+              # checkout 注入的 GITHUB_TOKEN extraheader 优先级高于 URL 凭据,必须清除
+              git config --unset-all http.https://github.com/.extraheader || true
             fi
             git push origin dev
             echo "merged ${BEHIND} commit(s) from upstream"
