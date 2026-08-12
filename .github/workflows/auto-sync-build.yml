@@ -18,9 +18,8 @@ jobs:
   sync:
     name: Sync upstream
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      workflows: write
+    # 注意:此处不声明 permissions,继承仓库默认权限(仓库已设为 Read and write,
+    # 使 GITHUB_TOKEN 持有 workflows: write,否则推送含 workflow 文件变更的提交会被拒)
     outputs:
       updated: ${{ steps.check.outputs.updated }}
       upstream_sha: ${{ steps.check.outputs.upstream_sha }}
@@ -144,6 +143,8 @@ jobs:
     needs: [sync, build, release]
     if: always() && (needs.sync.result == 'failure' || needs.sync.outputs.updated == 'true')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Compose and send Feishu card
         env:
