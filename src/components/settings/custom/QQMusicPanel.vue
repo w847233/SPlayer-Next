@@ -65,7 +65,7 @@ const handleLogin = async (): Promise<void> => {
         toast.success(t("settings.qm.toast.loginSuccess", { name: "" }));
       }
     }
-  } catch (err) {
+  } catch {
     toast.error(t("settings.qm.toast.loginFailed"));
   } finally {
     loggingIn.value = false;
