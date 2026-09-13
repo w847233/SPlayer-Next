@@ -48,7 +48,24 @@ jobs:
             git log --format="%h|%H|%s" HEAD..upstream/dev > /tmp/upstream_commits.txt
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git merge upstream/dev --no-edit --no-ff
+            if git merge -X theirs upstream/dev --no-edit --no-ff; then
+              :
+            else
+              if [ -z "$(git diff --name-only --diff-filter=U)" ]; then
+                echo "Upstream merge failed without unresolved conflict paths." >&2
+                exit 1
+              fi
+              echo "Merge conflicts detected; resolving in favor of upstream/dev"
+              while IFS= read -r conflict_path; do
+                if git cat-file -e ":3:${conflict_path}" 2>/dev/null; then
+                  git checkout --theirs -- "${conflict_path}"
+                else
+                  git rm -f -- "${conflict_path}"
+                fi
+              done < <(git diff --name-only --diff-filter=U)
+              git add -A
+              git commit -m "Merge upstream dev (prefer upstream on conflicts)"
+            fi
             if [ -n "${SYNC_TOKEN}" ]; then
               git remote set-url origin "https://x-access-token:${SYNC_TOKEN}@github.com/w847233/SPlayer-Next.git"
               # checkout 注入的 GITHUB_TOKEN extraheader 优先级高于 URL 凭据,必须清除
