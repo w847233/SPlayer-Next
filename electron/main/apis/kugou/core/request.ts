@@ -6,8 +6,9 @@
  * - kgGatewayRequest: KG网关鉴权请求（自动注入设备标识、时间戳、签名与网关路由头）
  */
 
-import { KG_APPID, KG_CLIENTVER, KG_GATEWAY_URL } from "./config";
+import { KG_GATEWAY_URL, getKgAppid, getKgClientver } from "./config";
 import { cleanKgResponse, getDeviceMid, signatureAndroidParams } from "./crypto";
+import { getSessionCookies } from "@main/database/sessions";
 
 interface FetchOptions {
   headers?: Record<string, string>;
@@ -83,16 +84,19 @@ export const kgGatewayRequest = async <T = KGRawBody>(
 
   const clienttime = Math.floor(Date.now() / 1000);
   const mid = getDeviceMid();
-  const dfid = "-";
+  const session = getSessionCookies("kugou");
+  const dfid = session.dfid || "-";
   const uuid = "-";
 
   const defaultParams: Record<string, unknown> = {
     dfid,
     mid,
     uuid,
-    appid: KG_APPID,
-    clientver: KG_CLIENTVER,
+    appid: getKgAppid(),
+    clientver: getKgClientver(),
     clienttime,
+    ...(session.token ? { token: session.token } : {}),
+    ...(session.userid ? { userid: session.userid } : {}),
   };
 
   const mergedParams = { ...defaultParams, ...params };

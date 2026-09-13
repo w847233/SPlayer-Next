@@ -5,6 +5,7 @@ import { useMediaStore } from "@/stores/media";
 import { useSettingsStore } from "@/stores/settings";
 import { navigateToArtist } from "@/utils/navigate";
 import { getValidArtists } from "@shared/utils/track";
+import { getLineText } from "@shared/utils/lyrics";
 
 withDefaults(
   defineProps<{
@@ -25,8 +26,8 @@ const artists = computed(() => getValidArtists(media.track?.artists));
 /** 主歌词行 */
 const mainLines = computed(() => media.parsedLyric.filter((l) => !l.isBG));
 
-/** 当前歌词文本 */
-const currentLyricText = computed(() => {
+/** 当前播放栏歌词 */
+const currentBarLyric = computed(() => {
   if (
     !settings.player.showLyricInBar ||
     !isPlaying.value ||
@@ -36,8 +37,11 @@ const currentLyricText = computed(() => {
     return null;
   const currentMs = media.parsedLyric[media.lyricIndex]?.startTime ?? 0;
   const line = mainLines.value.findLast((l) => l.startTime <= currentMs) ?? mainLines.value[0];
-  const text = line.words.map((w) => w.word).join("");
-  return line.translatedLyric ? `${text}（${line.translatedLyric}）` : text;
+  const text = getLineText(line);
+  return {
+    key: `${line.startTime}:${text}`,
+    text: line.translatedLyric ? `${text}（${line.translatedLyric}）` : text,
+  };
 });
 
 /** 歌手是否可跳转：非本地需有真实 id */
@@ -83,14 +87,14 @@ const isArtistLinkable = (artist: Artist): boolean => {
           <slot name="title-trailing" />
         </div>
         <Transition name="slide-up" mode="out-in">
-          <SMarquee
-            v-if="currentLyricText"
-            :key="`lyric-${media.lyricIndex}`"
-            class="text-on-surface-variant"
-            :class="compact ? 'text-xs leading-tight mt-0.5' : 'text-sm mt-1'"
-          >
-            {{ currentLyricText }}
-          </SMarquee>
+          <div v-if="currentBarLyric" :key="currentBarLyric.key" class="min-w-0">
+            <SMarquee
+              class="text-on-surface-variant"
+              :class="compact ? 'text-xs leading-tight mt-0.5' : 'text-sm mt-1'"
+            >
+              {{ currentBarLyric.text }}
+            </SMarquee>
+          </div>
           <div
             v-else
             key="artist"

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 defineOptions({ name: "SearchPage" });
 
-import type { Track } from "@shared/types/player";
+import type { PlaybackContext, Track } from "@shared/types/player";
 import { ALL_PLATFORMS, PLATFORM_SHORT_NAME, type Platform } from "@shared/types/platform";
 import type { CoverItem } from "@/types/artist";
 import { searchSongs, searchAlbums, searchArtists, searchPlaylists } from "@/apis/search";
@@ -164,6 +164,12 @@ const onPlatformSwitch = (key: string): void => {
   status.searchPlatform = key as Platform;
 };
 
+/** 失败后重试加载当前 tab */
+const onRetry = (): void => {
+  error.value = "";
+  fetchTab(activeTab.value, false);
+};
+
 /** 滚动触底加载下一页 */
 const onReachBottom = (tab: TabKey): void => {
   fetchTab(tab, true);
@@ -180,6 +186,14 @@ const isEmptyResult = computed(() => {
   const state = states[activeTab.value];
   return state.loaded && state.items.length === 0;
 });
+
+/** 搜索页播放来源上下文 */
+const playbackContext = computed<PlaybackContext>(() => ({
+  provider: status.searchPlatform,
+  originId: `search:${status.searchPlatform}:${keyword.value}`,
+  originType: "page",
+  originName: keyword.value ? `${t("search.title")}: ${keyword.value}` : t("search.title"),
+}));
 </script>
 
 <template>
@@ -220,10 +234,23 @@ const isEmptyResult = computed(() => {
     </div>
     <!-- 错误态 -->
     <div v-else-if="error" class="flex-1 flex items-center justify-center px-6">
-      <div class="text-center text-red-500/85">
-        <IconLucideTriangleAlert class="size-14 mx-auto mb-4 opacity-50" />
-        <div class="text-sm font-medium mb-1">{{ t("search.errorTitle") }}</div>
-        <div class="text-xs opacity-80 break-all max-w-xs">{{ error }}</div>
+      <div class="text-center flex flex-col items-center">
+        <div class="text-red-500/85 mb-4">
+          <IconLucideTriangleAlert class="size-14 mx-auto mb-3 opacity-50" />
+          <div class="text-sm font-medium mb-1">{{ t("search.errorTitle") }}</div>
+          <div class="text-xs opacity-80 break-all max-w-xs">{{ error }}</div>
+        </div>
+        <SButton
+          variant="secondary"
+          size="small"
+          :loading="states[activeTab].loading"
+          @click="onRetry"
+        >
+          <template #icon>
+            <IconLucideRotateCw class="size-3.5" />
+          </template>
+          {{ t("common.retry") }}
+        </SButton>
       </div>
     </div>
     <!-- 首次加载 -->
@@ -247,6 +274,7 @@ const isEmptyResult = computed(() => {
         v-if="activeTab === 'songs'"
         :items="states.songs.items"
         :source="status.searchPlatform"
+        :playback-context="playbackContext"
         :show-size="false"
         :has-more="states.songs.hasMore"
         :loading-more="states.songs.loadingMore"

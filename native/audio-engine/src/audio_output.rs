@@ -102,12 +102,11 @@ impl Drop for AudioOutput {
 
 /// 常驻 MTA 工作线程，所有 cpal 调用都派给它执行。
 ///
-/// cpal 的 `com_initialized()` 会把首次触碰的线程初始化成 STA，而跟随系统默认设备时
-/// 用到的 `ActivateAudioInterfaceAsync` 只能在 MTA 调用，STA 上直接返回
-/// `RPC_E_CHANGED_MODE`；cpal 的 `IMMDeviceEnumerator` 又是进程级单例，创建时所处的
-/// apartment 决定它此后能否跨线程安全使用。一条永不退出、永不 `CoUninitialize` 的 MTA
-/// 线程同时收口这两点，并保证进程 MTA 不会在两次调用之间被拆掉——`AudioOutput` 持有的
-/// `cpal::Device` 里缓存着在该 apartment 里激活的 `IAudioClient`。
+/// cpal 的 `com_initialized()` 会把首次触碰的线程初始化成 STA；cpal 的
+/// `IMMDeviceEnumerator` 又是进程级单例，创建时所处的 apartment 决定它此后能否跨线程
+/// 安全使用。一条永不退出、永不 `CoUninitialize` 的 MTA 线程同时收口这两点，并保证进程
+/// MTA 不会在两次调用之间被拆掉——`AudioOutput` 持有的 `cpal::Device` 里缓存着在该
+/// apartment 里激活的 `IAudioClient`。
 #[cfg(target_os = "windows")]
 mod mta {
     use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -239,6 +238,17 @@ pub fn default_device_name() -> Option<String> {
     .unwrap_or_default()
 }
 
+/// 取系统默认输出设备稳定 ID，供主进程做切换检测（显示名可重复、可被改名）
+pub fn default_device_id() -> Option<String> {
+    run_in_mta(|| {
+        let id = cpal::default_host()
+            .default_output_device()
+            .and_then(|device| device_id_string(&device));
+        Ok(id)
+    })
+    .unwrap_or_default()
+}
+
 /// 按设备 ID（`None` 为默认设备）解析设备与输出配置。
 /// 设备支持 `requested_sample_rate` 时按该速率打开，否则使用设备默认配置。
 /// 样本格式优先沿用设备默认格式：PipeWire 等后端上报的 supported 列表包含
@@ -253,58 +263,70 @@ fn open_device_internal(
         Some(selector) => {
             find_device(&host, selector).with_context(|| format!("输出设备 '{selector}' 不存在"))?
         }
-        None => host.default_output_device().context("没有可用的输出设备")?,
-    };
-    let config = match requested_sample_rate {
-        Some(rate) => {
-            let default_config = device.default_output_config();
-            let default_format = default_config
-                .as_ref()
-                .ok()
-                .map(|config| config.sample_format());
-            let default_channels = default_config.as_ref().ok().map(|config| config.channels());
-            let at_rate = device.supported_output_configs().ok().and_then(|configs| {
-                let configs: Vec<_> = configs.collect();
-                configs
-                    .iter()
-                    .copied()
-                    .find(|range| {
-                        range.min_sample_rate() <= rate
-                            && rate <= range.max_sample_rate()
-                            && Some(range.sample_format()) == default_format
-                            && Some(range.channels()) == default_channels
-                    })
-                    .or_else(|| {
-                        configs.iter().copied().find(|range| {
-                            range.min_sample_rate() <= rate
-                                && rate <= range.max_sample_rate()
-                                && Some(range.sample_format()) == default_format
-                        })
-                    })
-                    .or_else(|| {
-                        configs.iter().copied().find(|range| {
-                            range.min_sample_rate() <= rate
-                                && rate <= range.max_sample_rate()
-                                && Some(range.channels()) == default_channels
-                        })
-                    })
-                    .or_else(|| {
-                        configs.iter().copied().find(|range| {
-                            range.min_sample_rate() <= rate && rate <= range.max_sample_rate()
-                        })
-                    })
-                    .map(|range| range.with_sample_rate(rate))
-            });
-            match at_rate {
-                Some(config) => config,
-                None => default_config.context("读取输出设备配置失败")?,
-            }
+        None => {
+            let default = host.default_output_device().context("没有可用的输出设备")?;
+            let default_id = device_id_string(&default).context("读取默认输出设备 ID 失败")?;
+            find_device(&host, &default_id).context("解析默认输出设备端点失败")?
         }
-        None => device
-            .default_output_config()
-            .context("读取输出设备配置失败")?,
     };
-    Ok((device, config))
+    let default_config = device
+        .default_output_config()
+        .context("读取输出设备配置失败")?;
+    #[cfg(target_os = "windows")]
+    {
+        let _ = requested_sample_rate;
+        Ok((device, default_config))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let config = match requested_sample_rate {
+            Some(rate) => {
+                if rate == default_config.sample_rate() {
+                    default_config
+                } else {
+                    let default_format = default_config.sample_format();
+                    let default_channels = default_config.channels();
+                    let at_rate = device.supported_output_configs().ok().and_then(|configs| {
+                        let configs: Vec<_> = configs.collect();
+                        configs
+                            .iter()
+                            .copied()
+                            .find(|range| {
+                                range.min_sample_rate() <= rate
+                                    && rate <= range.max_sample_rate()
+                                    && range.sample_format() == default_format
+                                    && range.channels() == default_channels
+                            })
+                            .or_else(|| {
+                                configs.iter().copied().find(|range| {
+                                    range.min_sample_rate() <= rate
+                                        && rate <= range.max_sample_rate()
+                                        && range.sample_format() == default_format
+                                })
+                            })
+                            .or_else(|| {
+                                configs.iter().copied().find(|range| {
+                                    range.min_sample_rate() <= rate
+                                        && rate <= range.max_sample_rate()
+                                        && range.channels() == default_channels
+                                })
+                            })
+                            .or_else(|| {
+                                configs.iter().copied().find(|range| {
+                                    range.min_sample_rate() <= rate
+                                        && rate <= range.max_sample_rate()
+                                })
+                            })
+                            .map(|range| range.with_sample_rate(rate))
+                    });
+                    at_rate.unwrap_or(default_config)
+                }
+            }
+            None => default_config,
+        };
+        Ok((device, config))
+    }
 }
 
 fn open_device(
@@ -347,6 +369,61 @@ fn build_typed_stream_for_format(
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn format_pipewire_props(sample_rate: u32) -> String {
+    if sample_rate > 0 {
+        format!(
+            r#"{{"node.rate":"1/{sample_rate}","application.id":"top.imsyy.splayer_next","application.name":"SPlayer-Next","application.icon-name":"top.imsyy.splayer_next","media.name":"Playback"}}"#
+        )
+    } else {
+        r#"{"application.id":"top.imsyy.splayer_next","application.name":"SPlayer-Next","application.icon-name":"top.imsyy.splayer_next","media.name":"Playback"}"#.to_string()
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod pipewire_props {
+    use std::{
+        ffi::OsString,
+        sync::{Mutex, MutexGuard},
+    };
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    pub(super) struct Guard {
+        original: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl Guard {
+        pub(super) fn set_stream_props(sample_rate: u32) -> Self {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+            let original = std::env::var_os("PIPEWIRE_PROPS");
+
+            // Linux PipeWire 下 cpal 构造流未携带 node.rate 属性与稳定应用元数据。
+            // 注入 node.rate 驱动硬件 DAC 切换时钟频率，注入 application.id 与固定 media.name 使 WirePlumber 能稳定记忆音量。
+            unsafe {
+                std::env::set_var("PIPEWIRE_PROPS", super::format_pipewire_props(sample_rate));
+            }
+
+            Self {
+                original,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            unsafe {
+                match self.original.take() {
+                    Some(value) => std::env::set_var("PIPEWIRE_PROPS", value),
+                    None => std::env::remove_var("PIPEWIRE_PROPS"),
+                }
+            }
+        }
+    }
+}
+
 fn build_typed_stream<T>(
     device: &cpal::Device,
     config: StreamConfig,
@@ -358,24 +435,39 @@ fn build_typed_stream<T>(
 where
     T: SizedSample + Sample + FromSample<f32>,
 {
-    let stream = device.build_output_stream(
-        config,
-        move |data: &mut [T], _| {
-            let gain = f32::from_bits(volume.load(Ordering::Relaxed));
-            if stopped.load(Ordering::Acquire) {
-                data.fill(T::EQUILIBRIUM);
-                return;
-            }
-            for output in data {
-                *output = T::from_sample(source.next().unwrap_or(0.0) * gain);
-            }
-        },
-        move |error| {
-            warn!(%error, "音频输出流失败");
-            on_failure();
-        },
-        None,
-    )?;
+    let stream = {
+        #[cfg(target_os = "linux")]
+        let _props_guard = pipewire_props::Guard::set_stream_props(config.sample_rate);
+
+        device.build_output_stream(
+            config,
+            move |data: &mut [T], _| {
+                let gain = f32::from_bits(volume.load(Ordering::Relaxed));
+                if stopped.load(Ordering::Acquire) {
+                    data.fill(T::EQUILIBRIUM);
+                    return;
+                }
+                for output in data {
+                    *output = T::from_sample(source.next().unwrap_or(0.0) * gain);
+                }
+            },
+            move |error| {
+                let err_msg = error.to_string();
+                // 设备失效的两种上报文本：默认设备监听的 "no longer valid"，以及绑定端点被拔出时
+                // GetCurrentPadding 返回 0x88890004 (AUDCLNT_E_DEVICE_INVALIDATED) 的十进制 OS Error。
+                // 均属预期失效，重建即可
+                let invalidated =
+                    err_msg.contains("no longer valid") || err_msg.contains("-2004287484");
+                if invalidated {
+                    info!("音频输出流因设备切换失效，准备重建");
+                } else {
+                    warn!(%error, "音频输出流失败");
+                }
+                on_failure();
+            },
+            None,
+        )?
+    };
     Ok(stream)
 }
 
@@ -413,5 +505,22 @@ mod tests {
         assert!("AppleHDAEngineOutput:1B,0,1,0:0"
             .parse::<cpal::DeviceId>()
             .is_err());
+    }
+
+    #[test]
+    fn pipewire_props_includes_stable_identity_and_optional_rate() {
+        let props_with_rate = format_pipewire_props(96000);
+        assert!(props_with_rate.contains(r#""node.rate":"1/96000""#));
+        assert!(props_with_rate.contains(r#""application.id":"top.imsyy.splayer_next""#));
+        assert!(props_with_rate.contains(r#""application.name":"SPlayer-Next""#));
+        assert!(props_with_rate.contains(r#""application.icon-name":"top.imsyy.splayer_next""#));
+        assert!(props_with_rate.contains(r#""media.name":"Playback""#));
+
+        let props_without_rate = format_pipewire_props(0);
+        assert!(!props_without_rate.contains("node.rate"));
+        assert!(props_without_rate.contains(r#""application.id":"top.imsyy.splayer_next""#));
+        assert!(props_without_rate.contains(r#""application.name":"SPlayer-Next""#));
+        assert!(props_without_rate.contains(r#""application.icon-name":"top.imsyy.splayer_next""#));
+        assert!(props_without_rate.contains(r#""media.name":"Playback""#));
     }
 }

@@ -1,29 +1,56 @@
 /**
  * QM 用户基础资料模块
  *
- * 通过登录 Cookie 中的 uin 及官方接口获取用户信息
+ * 通过 music.UserInfo.userInfoServer / GetLoginUserInfo 获取用户信息
  */
 
-import { getQQMusicCookies, getQQMusicUin, qmRequest } from "../core/request";
+import { clearQQMusicCookies, getQQMusicCookies, getQQMusicUin, qmRequest } from "../core/request";
+import { normalizeQQMusicVip, type QQMusicVipData } from "../core/vip";
 import { coreLog } from "@main/utils/logger";
 import type { QMModule } from "../core/types";
 
-interface UserBaseInfoData {
-  vec_user_info?: Array<{
-    uin?: string;
-    nick?: string;
-    headpic?: string;
-    icon?: string;
-    vip_flag?: number;
-    vip_level?: number;
-    is_vip?: number;
-    is_super_vip?: number;
-  }>;
+interface ProfileCreator {
+  nick?: string;
+  headpic?: string;
 }
 
+/** 获取用户信息 */
+const fetchCgiProfile = async (): Promise<ProfileCreator | null> => {
+  try {
+    const data = await qmRequest<{
+      info?: {
+        nick?: string;
+        nickname?: string;
+        name?: string;
+        logo?: string;
+      };
+    }>("music.UserInfo.userInfoServer", "GetLoginUserInfo", {});
+    const info = data?.info;
+    if (info && (info.nick || info.nickname || info.name || info.logo)) {
+      return {
+        nick: info.nick || info.nickname || info.name,
+        headpic: info.logo,
+      };
+    }
+  } catch (err) {
+    coreLog.warn("[qm-user-detail] GetLoginUserInfo 接口请求失败:", err);
+  }
+  return null;
+};
+
+/** 获取当前账号的会员播放权限 */
+const fetchVipStatus = async (): Promise<QQMusicVipData | null> => {
+  try {
+    return await qmRequest<QQMusicVipData>("VipLogin.VipLoginInter", "vip_login_base", {});
+  } catch (err) {
+    coreLog.warn("[qm-user-detail] vip_login_base 接口请求失败:", err);
+    return null;
+  }
+};
+
 const userDetail: QMModule = async (_params) => {
-  const cookies = getQQMusicCookies();
   const uin = getQQMusicUin();
+  const cookies = getQQMusicCookies();
 
   const hasKey = !!(
     cookies.qm_keyst ||
@@ -33,12 +60,6 @@ const userDetail: QMModule = async (_params) => {
     cookies.skey
   );
 
-  coreLog.info("[qm-user-detail] 获取登录状态与资料:", {
-    uin,
-    hasKey,
-    cookieKeys: Object.keys(cookies),
-  });
-
   if (!uin || uin === "0" || !hasKey) {
     return {
       code: 301,
@@ -47,51 +68,34 @@ const userDetail: QMModule = async (_params) => {
     };
   }
 
-  // 默认头像由 QQ 头像规范构造
-  const defaultAvatar = `https://q.qlogo.cn/headimg_dl?dst_uin=${uin}&spec=100`;
+  const [creator, vipData] = await Promise.all([fetchCgiProfile(), fetchVipStatus()]);
 
-  try {
-    const data = await qmRequest<UserBaseInfoData>("music.UserBaseInfoServer", "GetUserBaseInfo", {
-      vec_uin: [uin],
-    });
-
-    const user = data?.vec_user_info?.[0];
-    const nickname = user?.nick || `QQ用户_${uin.slice(-4)}`;
-    const avatarUrl = user?.headpic || defaultAvatar;
-    const isVip = !!(user?.is_vip || user?.is_super_vip || (user?.vip_flag && user.vip_flag > 0));
-
-    coreLog.info("[qm-user-detail] 成功获取用户资料:", {
-      uin,
-      nickname,
-      isVip,
-      vipLevel: user?.vip_level ?? 0,
-    });
-
+  // 若接口双双彻底失败（说明凭据已过期且自动续期失败）
+  if (!creator && !vipData) {
+    coreLog.warn("[qm-user-detail] 凭据已失效，清除 QM 会话");
+    clearQQMusicCookies();
     return {
-      code: 200,
-      loggedIn: true,
-      profile: {
-        userId: uin,
-        nickname,
-        avatarUrl,
-        isVip,
-        vipLevel: user?.vip_level ?? 0,
-      },
-    };
-  } catch (err) {
-    coreLog.warn("[qm-user-detail] 官方接口调用失败，使用基础 UIN 兜底资料:", err);
-    // 接口异常时回退到纯 UIN 的基础身份
-    return {
-      code: 200,
-      loggedIn: true,
-      profile: {
-        userId: uin,
-        nickname: `QQ用户_${uin.slice(-4)}`,
-        avatarUrl: defaultAvatar,
-        isVip: false,
-      },
+      code: 301,
+      loggedIn: false,
+      message: "QM 登录已过期，请重新登录",
     };
   }
+
+  const avatarUrl = creator?.headpic?.replace(/^http:\/\//, "https://");
+  const nickname = creator?.nick || "";
+  const vip = normalizeQQMusicVip(vipData);
+
+  return {
+    code: 200,
+    loggedIn: true,
+    profile: {
+      userId: uin,
+      nickname,
+      avatarUrl: avatarUrl || "",
+      isVip: vip.isVip,
+      vipLevel: vip.vipLevel,
+    },
+  };
 };
 
 export default userDetail;

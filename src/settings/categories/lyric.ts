@@ -45,6 +45,12 @@ const lyricCategory: SettingCategory = {
           ],
         },
         {
+          key: "preferPluginLyric",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.preferPluginLyric" },
+          defaultValue: false,
+        },
+        {
           key: "lyricSourceOrder",
           type: "custom",
           component: LyricSourceOrderConfig,
@@ -199,31 +205,40 @@ const lyricCategory: SettingCategory = {
           defaultValue: true,
         },
         {
+          key: "showRuby",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.showRuby" },
+          defaultValue: true,
+        },
+        {
           key: "showRomanization",
           type: "switch",
           binding: { store: "settings", path: "lyric.showRomanization" },
           defaultValue: true,
-          visible: () => lyricEngine() === "physics",
         },
         {
-          key: "amllShowLineRomanization",
+          key: "showWordRomanization",
           type: "switch",
-          binding: { store: "settings", path: "lyric.amllShowLineRomanization" },
+          binding: { store: "settings", path: "lyric.showWordRomanization" },
           defaultValue: true,
-          visible: () => lyricEngine() === "amll",
-        },
-        {
-          key: "amllShowWordRomanization",
-          type: "switch",
-          binding: { store: "settings", path: "lyric.amllShowWordRomanization" },
-          defaultValue: true,
-          visible: () => lyricEngine() === "amll",
         },
       ],
     },
     {
       id: "lyricDisplay",
       items: [
+        {
+          key: "enableScale",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.enableScale" },
+          defaultValue: true,
+        },
+        {
+          key: "bgAlwaysBelow",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.bgAlwaysBelow" },
+          defaultValue: false,
+        },
         {
           key: "enableWordHighlight",
           type: "switch",
@@ -256,6 +271,48 @@ const lyricCategory: SettingCategory = {
           type: "switch",
           binding: { store: "settings", path: "lyric.hidePassedLines" },
           defaultValue: false,
+        },
+      ],
+    },
+    {
+      id: "lyricAMLLOptimize",
+      visible: () => lyricEngine() === "amll",
+      items: [
+        {
+          key: "amllCleanUnintentionalOverlaps",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.amllCleanUnintentionalOverlaps" },
+          defaultValue: true,
+        },
+        {
+          key: "amllTryAdvanceStartTime",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.amllTryAdvanceStartTime" },
+          defaultValue: true,
+        },
+        {
+          key: "amllConvertExcessiveBackgroundLines",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.amllConvertExcessiveBackgroundLines" },
+          defaultValue: true,
+        },
+        {
+          key: "amllSyncMainAndBackgroundLines",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.amllSyncMainAndBackgroundLines" },
+          defaultValue: true,
+        },
+        {
+          key: "amllNormalizeSpaces",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.amllNormalizeSpaces" },
+          defaultValue: true,
+        },
+        {
+          key: "amllResetLineTimestamps",
+          type: "switch",
+          binding: { store: "settings", path: "lyric.amllResetLineTimestamps" },
+          defaultValue: true,
         },
       ],
     },
