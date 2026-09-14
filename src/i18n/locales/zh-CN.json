@@ -1688,10 +1688,11 @@
     },
     "updateChannel": {
       "label": "更新通道",
-      "description": "选择正式版、Beta 预览版或 Alpha 内测版更新",
+      "description": "选择正式版、Beta 预览版、Alpha 内测版或 Nightly 持续构建更新",
       "stable": "正式版",
       "beta": "Beta 预览版",
-      "alpha": "Alpha 内测版"
+      "alpha": "Alpha 内测版",
+      "nightly": "Nightly 持续构建"
     },
     "checkUpdate": {
       "label": "检查更新",
