@@ -24,21 +24,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       has_new_commits: ${{ steps.check.outputs.has_new_commits }}
+      prev_sha: ${{ steps.check.outputs.prev_sha }}
     steps:
       - name: Check out dev branch
         uses: actions/checkout@v5
         with:
           ref: dev
-          fetch-depth: 0
 
       - name: Compare commit with latest nightly release
         id: check
         shell: bash
         run: |
-          NIGHTLY_TAG="v0.0.0-nightly"
+          NIGHTLY_TAG="nightly"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "手动触发构建，直接继续执行"
             echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
+            echo "prev_sha=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -47,6 +48,7 @@ jobs:
 
           echo "当前 dev 最新 Commit: $CURRENT_DEV_SHA"
           echo "上次 Nightly Tag Commit: $REMOTE_TAG_SHA"
+          echo "prev_sha=$REMOTE_TAG_SHA" >> "$GITHUB_OUTPUT"
 
           if [ -n "$REMOTE_TAG_SHA" ] && [ "$REMOTE_TAG_SHA" = "$CURRENT_DEV_SHA" ]; then
             echo "自上次 Nightly 构建以来无新代码提交，跳过本次夜间构建"
@@ -54,18 +56,6 @@ jobs:
           else
             echo "检测到新提交代码，启动夜间多平台构建"
             echo "has_new_commits=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate Check Summary
-        if: always()
-        shell: bash
-        run: |
-          if [ "${{ steps.check.outputs.has_new_commits }}" = "true" ]; then
-            echo "### 🔍 每日构建检查: 发现新提交代码" >> $GITHUB_STEP_SUMMARY
-            echo "已触发平台全量构建矩阵与滚动更新发布" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### 🔍 每日构建检查: 无新提交代码" >> $GITHUB_STEP_SUMMARY
-            echo "自上次 Nightly 发布以来 dev 分支无新提交，已自动跳过构建" >> $GITHUB_STEP_SUMMARY
           fi
 
   # 平台独立构建
@@ -118,14 +108,7 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            . -> target
-            native/audio-engine -> target
-            native/audio-capture -> target
-            native/media-ctrl -> target
-            native/taskbar-lyric -> target
-            native/taskbar-thumbnail -> target
-            native/opencc -> target
+          workspaces: ". -> target"
 
       # Linux: 安装系统构建/打包依赖
       - name: 安装系统依赖 (Linux)
@@ -148,7 +131,7 @@ jobs:
 
       # 安装项目依赖
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
       # 动态注入递增的 Nightly 构建版本号
       - name: Generate Nightly Version
@@ -195,33 +178,6 @@ jobs:
           name: SPlayer-Next-${{ matrix.target }}
           path: dist/*.*
 
-      # 生成当前平台的运行工作摘要 (Job Summary)
-      - name: Generate Job Summary
-        if: always()
-        shell: bash
-        run: |
-          echo "### 📦 构建产物明细 - ${{ matrix.name }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| 文件名 | 格式 | 文件大小 |" >> $GITHUB_STEP_SUMMARY
-          echo "| :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
-          found=0
-          for f in dist/*; do
-            if [ -f "$f" ]; then
-              fname=$(basename "$f")
-              ext="${fname##*.}"
-              case "$ext" in
-                exe|dmg|zip|AppImage|deb|rpm|pacman|gz)
-                  fsize=$(ls -lh "$f" | awk '{print $5}')
-                  echo "| \`$fname\` | **$ext** | $fsize |" >> $GITHUB_STEP_SUMMARY
-                  found=1
-                  ;;
-              esac
-            fi
-          done
-          if [ "$found" -eq 0 ]; then
-            echo "| *(未生成安装包或构建中断)* | - | - |" >> $GITHUB_STEP_SUMMARY
-          fi
-
   # 合并多架构更新清单并滚动覆盖发布至单一固定 Tag
   release:
     name: Publish Nightly Release
@@ -241,7 +197,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -253,21 +209,24 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      # 整理待发布资源
+      # 整理待发布资源并执行清单合并单元测试
       - name: Prepare release assets
         shell: bash
         run: |
           npm install --no-save --prefix "$RUNNER_TEMP/jsyaml" js-yaml@4.1.0
           NODE_PATH="$RUNNER_TEMP/jsyaml/node_modules" \
+            node --test .github/scripts/prepare-release-assets.test.cjs
+          NODE_PATH="$RUNNER_TEMP/jsyaml/node_modules" \
             node .github/scripts/prepare-release-assets.cjs artifacts release-assets "$APP_VERSION"
           echo "待发布资源："
           ls -1 release-assets
 
-      # 滚动覆盖发布到固定 Tag v0.0.0-nightly
+      # 滚动覆盖发布到固定 Tag nightly
       - name: Publish or Update Nightly Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NIGHTLY_TAG: v0.0.0-nightly
+          NIGHTLY_TAG: nightly
+          PREV_COMMIT_SHA: ${{ needs.check-commits.outputs.prev_sha }}
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -280,70 +239,11 @@ jobs:
             gh release delete "$NIGHTLY_TAG" --repo "$GITHUB_REPOSITORY" --yes
           fi
 
-          COMMIT_MSG=$(git log -1 --pretty=%B | head -n 1)
-          COMMIT_HASH=$(git rev-parse --short HEAD)
-
-          cat > notes.md << 'EOF'
-          ⚡ **每日夜间持续构建版本 (Nightly Build)**
-
-          - **版本**: `$APP_VERSION`
-          - **最新提交**: [`$COMMIT_HASH`](https://github.com/$GITHUB_REPOSITORY/commit/$COMMIT_HASH) - $COMMIT_MSG
-          - **更新时间**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          - **平台支持**: Windows (x64 / arm64), macOS (x64 / arm64), Linux (x64 / arm64)
-          - **说明**: 此版本由 `dev` 分支每日凌晨定时自动构建，供尝鲜测试与问题验证。客户端切换至 `Nightly` 通道即可
-          EOF
+          node scripts/gen-nightly-notes.cjs notes.md
 
           gh release create "$NIGHTLY_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "SPlayer-Next Nightly Build ($APP_VERSION)" \
+            --title "v$APP_VERSION" \
             --notes-file notes.md \
             --prerelease \
             release-assets/*
-
-      # 生成发布大屏工作摘要 (Job Summary)
-      - name: Generate Release Summary
-        if: success()
-        shell: bash
-        run: |
-          echo "## 🌙 SPlayer-Next Nightly 持续构建发布完成" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| 项目 | 信息 |" >> $GITHUB_STEP_SUMMARY
-          echo "| :--- | :--- |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔖 **构建版本** | \`$APP_VERSION\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🏷️ **Release Tag** | [\`$NIGHTLY_TAG\`](https://github.com/$GITHUB_REPOSITORY/releases/tag/$NIGHTLY_TAG) |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔀 **构建代码基** | 分支 \`dev\` ([${COMMIT_HASH}](https://github.com/$GITHUB_REPOSITORY/commit/${COMMIT_HASH})) |" >> $GITHUB_STEP_SUMMARY
-          echo "| 📝 **提交说明** | $COMMIT_MSG |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🚀 平台安装包下载" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| 平台与架构 | 文件名 | 文件大小 |" >> $GITHUB_STEP_SUMMARY
-          echo "| :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
-          for f in release-assets/*; do
-            if [ -f "$f" ]; then
-              fname=$(basename "$f")
-              ext="${fname##*.}"
-              case "$ext" in
-                exe|dmg|AppImage|deb|rpm|pacman|tar.gz)
-                  fsize=$(ls -lh "$f" | awk '{print $5}')
-                  plat="💻 其它"
-                  if [[ "$fname" =~ [wW]in|setup|portable|\.exe ]]; then
-                    plat="🪟 Windows"
-                  elif [[ "$fname" =~ [mM]ac|\.dmg ]]; then
-                    plat="🍎 macOS"
-                  elif [[ "$fname" =~ [lL]inux|\.AppImage|\.deb|\.rpm|\.pacman|\.tar\.gz ]]; then
-                    plat="🐧 Linux"
-                  fi
-                  echo "| $plat | [📥 \`$fname\`](https://github.com/$GITHUB_REPOSITORY/releases/download/$NIGHTLY_TAG/$fname) | $fsize |" >> $GITHUB_STEP_SUMMARY
-                  ;;
-              esac
-            fi
-          done
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔄 自动更新元数据清单" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| 更新清单文件 | 说明 | 状态 |" >> $GITHUB_STEP_SUMMARY
-          echo "| :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
-          [ -f "release-assets/latest.yml" ] && echo "| \`latest.yml\` | Windows (x64 / arm64) | ✅ 就绪 |" >> $GITHUB_STEP_SUMMARY
-          [ -f "release-assets/latest-mac.yml" ] && echo "| \`latest-mac.yml\` | macOS (x64 / arm64) | ✅ 就绪 |" >> $GITHUB_STEP_SUMMARY
-          [ -f "release-assets/latest-linux.yml" ] && echo "| \`latest-linux.yml\` | Linux (x64) | ✅ 就绪 |" >> $GITHUB_STEP_SUMMARY
-          [ -f "release-assets/latest-linux-arm64.yml" ] && echo "| \`latest-linux-arm64.yml\` | Linux (arm64) | ✅ 就绪 |" >> $GITHUB_STEP_SUMMARY

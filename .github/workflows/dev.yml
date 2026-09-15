@@ -39,21 +39,12 @@ jobs:
           - name: Windows x64
             runner: windows-latest
             target: windows-x64
-          - name: Windows arm64
-            runner: windows-11-arm
-            target: windows-arm64
-          - name: macOS x64
-            runner: macos-15-intel
-            target: macos-x64
           - name: macOS arm64
             runner: macos-latest
             target: macos-arm64
           - name: Linux x64
             runner: ubuntu-latest
             target: linux-x64
-          - name: Linux arm64
-            runner: ubuntu-24.04-arm
-            target: linux-arm64
     steps:
       - name: Check out git repository
         uses: actions/checkout@v5
@@ -73,14 +64,7 @@ jobs:
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            . -> target
-            native/audio-engine -> target
-            native/audio-capture -> target
-            native/media-ctrl -> target
-            native/taskbar-lyric -> target
-            native/taskbar-thumbnail -> target
-            native/opencc -> target
+          workspaces: ". -> target"
 
       # Linux: 安装系统构建/打包依赖
       - name: 安装系统依赖 (Linux)
@@ -103,9 +87,9 @@ jobs:
 
       # 安装项目依赖
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
-      # 构建各平台产物
+      # 构建各平台代表性产物
       - name: Build ${{ matrix.name }}
         shell: bash
         env:
@@ -116,20 +100,11 @@ jobs:
             windows-x64)
               pnpm build:win --x64 --publish never
               ;;
-            windows-arm64)
-              pnpm build:win --arm64 --publish never
-              ;;
-            macos-x64)
-              pnpm build:mac --x64 --publish never
-              ;;
             macos-arm64)
               pnpm build:mac --arm64 --publish never
               ;;
             linux-x64)
               pnpm build:linux --x64 --publish never
-              ;;
-            linux-arm64)
-              pnpm build:linux --arm64 --publish never
               ;;
             *)
               echo "Unsupported target: ${{ matrix.target }}"
@@ -152,30 +127,3 @@ jobs:
             dist/*.tar.gz
             dist/*.pacman
           if-no-files-found: ignore
-
-      # 生成当前平台的运行工作摘要 (Job Summary)
-      - name: Generate Job Summary
-        if: always()
-        shell: bash
-        run: |
-          echo "### 📦 构建产物明细 - ${{ matrix.name }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| 文件名 | 格式 | 文件大小 |" >> $GITHUB_STEP_SUMMARY
-          echo "| :--- | :--- | :--- |" >> $GITHUB_STEP_SUMMARY
-          found=0
-          for f in dist/*; do
-            if [ -f "$f" ]; then
-              fname=$(basename "$f")
-              ext="${fname##*.}"
-              case "$ext" in
-                exe|dmg|zip|AppImage|deb|rpm|pacman|gz)
-                  fsize=$(ls -lh "$f" | awk '{print $5}')
-                  echo "| \`$fname\` | **$ext** | $fsize |" >> $GITHUB_STEP_SUMMARY
-                  found=1
-                  ;;
-              esac
-            fi
-          done
-          if [ "$found" -eq 0 ]; then
-            echo "| *(未生成安装包或构建中断)* | - | - |" >> $GITHUB_STEP_SUMMARY
-          fi

@@ -52,7 +52,8 @@
     "build:linux": "pnpm build && electron-builder --config electron-builder.config.ts --linux",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "prepare": "husky"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -102,6 +103,8 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-vue": "^10.11.0",
     "happy-dom": "^20.11.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.1",
     "localforage": "^1.10.0",
     "lyric-dom": "^0.1.2",
     "marked": "^18.0.9",
@@ -126,5 +129,14 @@
     "vue-i18n": "^11.4.8",
     "vue-router": "^5.2.0",
     "vue-tsc": "^3.3.9"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,vue,mjs,cjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,yaml,yml,md,css,scss}": [
+      "prettier --write"
+    ]
   }
 }
