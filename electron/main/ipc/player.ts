@@ -747,7 +747,15 @@ export const registerPlayerIpc = (): void => {
       }
     } catch {}
   });
-
+  // 系统进入睡眠时暂停播放
+  powerMonitor.on("suspend", () => {
+    try {
+      getPlayer().pause();
+      playerLog.info("系统进入睡眠，已暂停播放");
+    } catch (error) {
+      playerLog.warn("睡眠时暂停播放失败:", error);
+    }
+  });
   // 系统休眠唤醒后重建音频输出设备
   const resumeHandler = async (): Promise<void> => {
     const inst = getPlayer();
