@@ -10,7 +10,6 @@ import TaskbarLyricLine from "./components/TaskbarLyricLine.vue";
 import { pickPrimaryIndex } from "lyric-kit";
 import { useNowPlayingSync } from "@windows/shared/composables/useNowPlayingSync";
 import { formatArtists } from "@shared/utils/track";
-import { getLineText } from "@shared/utils/lyrics";
 
 const config = reactive<TaskbarLyricSettings>({
   position: "auto",
@@ -150,7 +149,7 @@ const items = computed<RenderItem[]>(() => {
       {
         key: `line-${idx}`,
         role: "primary",
-        text: getLineText(line),
+        text: line.words.map((w) => w.word).join(""),
         line,
       },
     ];
@@ -164,7 +163,7 @@ const items = computed<RenderItem[]>(() => {
           list.push({
             key: `line-${idx + 1}`,
             role: "secondary",
-            text: getLineText(next),
+            text: next.words.map((w) => w.word).join(""),
             line: next,
           });
         }

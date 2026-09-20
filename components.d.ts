@@ -261,6 +261,7 @@ declare module 'vue' {
     SideBarLogo: typeof import('./src/components/layout/SideBarLogo.vue')['default']
     SImg: typeof import('./src/components/ui/SImg.vue')['default']
     SInput: typeof import('./src/components/ui/SInput.vue')['default']
+    SkipKeywordsConfig: typeof import('./src/components/settings/custom/SkipKeywordsConfig.vue')['default']
     SLoading: typeof import('./src/components/ui/SLoading.vue')['default']
     SLogo: typeof import('./src/components/ui/SLogo.vue')['default']
     SMarquee: typeof import('./src/components/ui/SMarquee.vue')['default']
@@ -305,6 +306,7 @@ declare module 'vue' {
     TooltipTrigger: typeof import('reka-ui')['TooltipTrigger']
     TrackInfo: typeof import('./src/components/player/TrackInfo.vue')['default']
     UiZoomDialog: typeof import('./src/components/modals/UiZoomDialog.vue')['default']
+    UncensorProfanityConfig: typeof import('./src/components/settings/custom/UncensorProfanityConfig.vue')['default']
     UpdateDialog: typeof import('./src/components/modals/UpdateDialog.vue')['default']
     WindowControls: typeof import('./src/components/layout/WindowControls.vue')['default']
   }

@@ -19,6 +19,7 @@ import type { SystemConfig, LocaleCode } from "@shared/types/settings";
 import { ALL_PLATFORMS } from "@shared/types/platform";
 import { defaultSystemConfig } from "@shared/defaults/settings";
 import { setByPath } from "@shared/utils/path";
+import { DEFAULT_SKIP_TRACK_KEYWORDS } from "@/utils/preset/skipKeywords";
 
 /**
  * 对账有序集合：保留存档中仍有效的项（顺序不变），
@@ -126,6 +127,7 @@ export const useSettingsStore = defineStore(
     /** 播放器 */
     const player = reactive<PlayerSettings>({
       playerBgType: "blur",
+      playerBgRenderer: "mesh",
       playerBgFps: 30,
       playerBgFlowSpeed: 4,
       playerBgRenderScale: 0.5,
@@ -156,8 +158,8 @@ export const useSettingsStore = defineStore(
 
     /** 强迫症设置 */
     const preset = reactive<PresetSettings>({
-      fuckDjMode: false,
-      uncensorProfanity: false,
+      skipKeywordsSongs: false,
+      skipTrackKeywords: [...DEFAULT_SKIP_TRACK_KEYWORDS],
       hideVipTag: false,
       hideQualityTag: false,
       showSubtitle: true,
@@ -214,7 +216,6 @@ export const useSettingsStore = defineStore(
       amllScaleSpringSoft: false,
       amllCleanUnintentionalOverlaps: true,
       amllTryAdvanceStartTime: true,
-      amllConvertExcessiveBackgroundLines: true,
       amllSyncMainAndBackgroundLines: true,
       amllNormalizeSpaces: true,
       amllResetLineTimestamps: true,
@@ -362,12 +363,16 @@ export const useSettingsStore = defineStore(
       storage: localStorage,
       omit: ["system"],
       afterHydrate: ({ store }) => {
-        const { lyric, appearance } = store as unknown as {
+        const { lyric, appearance, preset } = store as unknown as {
           lyric: LyricSettings;
           appearance: AppearanceSettings;
+          preset: PresetSettings;
         };
         if (typeof lyric.detectBackgroundLyrics !== "boolean") {
           lyric.detectBackgroundLyrics = true;
+        }
+        if (!Array.isArray(preset.skipTrackKeywords)) {
+          preset.skipTrackKeywords = [...DEFAULT_SKIP_TRACK_KEYWORDS];
         }
         lyric.lyricSourceOrder = reconcileOrder(lyric.lyricSourceOrder, ALL_PLATFORMS);
         lyric.lyricFormatOrder = reconcileOrder(lyric.lyricFormatOrder, DEFAULT_LYRIC_FORMAT_ORDER);
